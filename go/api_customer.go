@@ -341,7 +341,7 @@ func CustomersPost(w http.ResponseWriter, r *http.Request) {
 
 	// Generate UUID for the new customer
 	newCustomer.ID = uuid.New().String()
-	// Insert into Customer table
+
 	_, err = tx.ExecContext(context.Background(), `
 		INSERT INTO Customer (id, firstName, lastName, title, familyStatus, birthDate, socialSecurityNumber, taxId, jobStatus, addressId, bankDetailsId)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
