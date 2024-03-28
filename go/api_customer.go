@@ -244,6 +244,7 @@ func CustomersGet(w http.ResponseWriter, r *http.Request) {
 		log.Fatal(err)
 		return
 	}
+
 	defer rows.Close()
 
 	// Construct slice to hold customer details
@@ -298,9 +299,6 @@ func CustomersPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Generate UUID for the new customer
-	newCustomer.ID = uuid.New().String()
-
 	// Retrieve database credentials
 	db, err := connectToDB()
 	if err != nil {
@@ -341,6 +339,8 @@ func CustomersPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Generate UUID for the new customer
+	newCustomer.ID = uuid.New().String()
 	// Insert into Customer table
 	_, err = tx.ExecContext(context.Background(), `
 		INSERT INTO Customer (id, firstName, lastName, title, familyStatus, birthDate, socialSecurityNumber, taxId, jobStatus, addressId, bankDetailsId)
