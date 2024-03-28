@@ -1,4 +1,4 @@
-module catInsurance
+module github.com/salimbouch/catInsurance
 
 go 1.22.1
 
