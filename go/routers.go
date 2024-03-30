@@ -83,13 +83,6 @@ var routes = Routes{
 	},
 
 	Route{
-		"CustomersCustomerIdContractsGet",
-		strings.ToUpper("Get"),
-		"/v1/customers/{customerId}/contracts",
-		CustomersCustomerIdContractsGet,
-	},
-
-	Route{
 		"CustomersCustomerIdDelete",
 		strings.ToUpper("Delete"),
 		"/v1/customers/{customerId}",
@@ -97,17 +90,24 @@ var routes = Routes{
 	},
 
 	Route{
-		"CustomersCustomerIdGet",
-		strings.ToUpper("Get"),
-		"/v1/customers/{customerId}",
-		CustomersCustomerIdGet,
-	},
-
-	Route{
 		"CustomersCustomerIdPatch",
 		strings.ToUpper("Patch"),
 		"/v1/customers/{customerId}",
 		CustomersCustomerIdPatch,
+	},
+
+	Route{
+		"CustomersSearchGet",
+		strings.ToUpper("Get"),
+		"/v1/customers/search",
+		CustomersSearchGet,
+	},
+
+	Route{
+		"CustomersCustomerIdGet",
+		strings.ToUpper("Get"),
+		"/v1/customers/{customerId}",
+		CustomersCustomerIdGet,
 	},
 
 	Route{
@@ -122,13 +122,6 @@ var routes = Routes{
 		strings.ToUpper("Post"),
 		"/v1/customers",
 		CustomersPost,
-	},
-
-	Route{
-		"CustomersSearchGet",
-		strings.ToUpper("Get"),
-		"/v1/customers/search",
-		CustomersSearchGet,
 	},
 
 	Route{

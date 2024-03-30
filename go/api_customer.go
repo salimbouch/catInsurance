@@ -27,29 +27,6 @@ import (
 	"github.com/gorilla/mux"
 )
 
-type Customer struct {
-	ID                string `json:"id"`
-	FirstName         string `json:"firstName"`
-	LastName          string `json:"lastName"`
-	Title             string `json:"title"`
-	FamilyStatus      string `json:"familyStatus"`
-	BirthDate         string `json:"birthDate"`
-	SocialSecurityNum string `json:"socialSecurityNumber"`
-	TaxID             string `json:"taxId"`
-	JobStatus         string `json:"jobStatus"`
-	Address           struct {
-		Street      string `json:"street"`
-		HouseNumber string `json:"houseNumber"`
-		ZipCode     int    `json:"zipCode"`
-		City        string `json:"city"`
-	} `json:"address"`
-	BankDetails struct {
-		IBAN string `json:"iban"`
-		BIC  string `json:"bic"`
-		Name string `json:"name"`
-	} `json:"bankDetails"`
-}
-
 type DBCredentials struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
@@ -454,16 +431,127 @@ func CustomersCustomerIdDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func CustomersSearchGet(w http.ResponseWriter, r *http.Request) {
+	// Parse query parameters
+	queryParams := r.URL.Query()
+	page, err := strconv.Atoi(queryParams.Get("page"))
+	if err != nil || page < 1 {
+		page = 1 // Default to page 1 if the page parameter is missing or invalid
+	}
+
+	pageSize, err := strconv.Atoi(queryParams.Get("pageSize"))
+	if err != nil || pageSize < 1 {
+		pageSize = 20 // Default page size if pageSize parameter is missing or invalid
+	}
+
+	// Build the SQL query and parameter list
+	var args []interface{}
+	sqlQuery := "SELECT c.id, c.firstName, c.lastName, c.title, c.familyStatus, c.birthDate, c.socialSecurityNumber, c.taxId, c.jobStatus, " +
+		"a.street, a.houseNumber, a.zipCode, a.city, " +
+		"b.iban, b.bic, b.name " +
+		"FROM Customer c " +
+		"INNER JOIN Address a ON c.addressId = a.id " +
+		"INNER JOIN BankDetails b ON c.bankDetailsId = b.id " +
+		"WHERE 1=1"
+
+	if id := queryParams.Get("id"); id != "" {
+		sqlQuery += " AND c.id = ?"
+		args = append(args, id)
+	}
+	if name := queryParams.Get("name"); name != "" {
+		sqlQuery += " AND c.firstName = ?"
+		args = append(args, name)
+	}
+	if lastName := queryParams.Get("lastName"); lastName != "" {
+		sqlQuery += " AND c.lastName = ?"
+		args = append(args, lastName)
+	}
+	if address := queryParams.Get("address"); address != "" {
+		sqlQuery += " AND a.street = ?"
+		args = append(args, address)
+	}
+
+	// Add pagination to the SQL query
+	sqlQuery += " LIMIT ? OFFSET ?"
+	args = append(args, pageSize, (page-1)*pageSize)
+
+	// Execute the SQL query
+	db, err := connectToDB()
+	if err != nil {
+		http.Error(w, "Error connecting to database", http.StatusInternalServerError)
+		log.Fatal(err)
+		return
+	}
+	defer db.Close()
+
+	rows, err := db.QueryContext(r.Context(), sqlQuery, args...)
+	if err != nil {
+		http.Error(w, "Error retrieving customer details "+err.Error(), http.StatusInternalServerError)
+		log.Fatal(err)
+		return
+	}
+	defer rows.Close()
+
+	// Construct slice to hold customer details
+	var customers []CustomerRes
+
+	// Iterate over the rows and populate the customers slice
+	for rows.Next() {
+		var customer CustomerRes
+		customer.Address = &Address{}
+		customer.BankDetails = &BankDetails{}
+		if err := rows.Scan(
+			&customer.Id,
+			&customer.FirstName,
+			&customer.LastName,
+			&customer.Title,
+			&customer.FamilyStatus,
+			&customer.BirthDate,
+			&customer.SocialSecurityNumber,
+			&customer.TaxId,
+			&customer.JobStatus,
+			&customer.Address.Street,
+			&customer.Address.HouseNumber,
+			&customer.Address.ZipCode,
+			&customer.Address.City,
+			&customer.BankDetails.Iban,
+			&customer.BankDetails.Bic,
+			&customer.BankDetails.Name); err != nil {
+			http.Error(w, "Error scanning customer details", http.StatusInternalServerError)
+			log.Fatal(err)
+			return
+		}
+
+		// Append customer details to the customers slice
+		customers = append(customers, customer)
+	}
+
+	// Check for errors during rows iteration
+	if err := rows.Err(); err != nil {
+		http.Error(w, "Error iterating over customer details", http.StatusInternalServerError)
+		log.Fatal(err)
+		return
+	}
+
+	if len(customers) == 0 {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	// Convert customers slice to JSON
+	responseJSON, err := json.Marshal(customers)
+	if err != nil {
+		http.Error(w, "Error serializing customer details", http.StatusInternalServerError)
+		log.Fatal(err)
+		return
+	}
+
+	// Write JSON response
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	w.WriteHeader(http.StatusOK)
+	w.Write(responseJSON)
 }
 
 func CustomersCustomerIdPatch(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	w.WriteHeader(http.StatusOK)
 }
-
-/*func CustomersCustomerIdContractsGet(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
-	w.WriteHeader(http.StatusOK)
-} */
