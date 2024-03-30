@@ -130,20 +130,18 @@ func CustomersCustomerIdGet(w http.ResponseWriter, r *http.Request) {
 	defer db.Close()
 
 	// Query to retrieve customer details with JOIN
-	var (
-		firstName, lastName, title, familyStatus, birthDate string
-		socialSecurityNumber, taxId, jobStatus              string
-		street, houseNumber, city                           string
-		zipCode                                             int
-		iban, bic, bankName                                 string
-	)
+	var customer CustomerRes
+
+	// Initialize Address and BankDetails fields
+	customer.Address = &Address{}
+	customer.BankDetails = &BankDetails{}
 
 	err = db.QueryRowContext(r.Context(), `
     SELECT
-        c.firstName, c.lastName, COALESCE(title, '') title, c.familyStatus, c.birthDate,
+        c.id, c.firstName, c.lastName, COALESCE(c.title, '') AS title, c.familyStatus, c.birthDate,
         c.socialSecurityNumber, c.taxId, c.jobStatus,
         a.street, a.houseNumber, a.zipCode, a.city,
-        b.iban, b.bic, b.name
+        b.iban, b.bic, b.name AS bankName
     FROM
         Customer AS c
     JOIN
@@ -152,42 +150,18 @@ func CustomersCustomerIdGet(w http.ResponseWriter, r *http.Request) {
         BankDetails AS b ON c.bankDetailsId = b.id
     WHERE
         c.id = ?`, customerID).Scan(
-		&firstName, &lastName, &title, &familyStatus, &birthDate,
-		&socialSecurityNumber, &taxId, &jobStatus,
-		&street, &houseNumber, &zipCode, &city,
-		&iban, &bic, &bankName)
+		&customer.Id, &customer.FirstName, &customer.LastName, &customer.Title, &customer.FamilyStatus, &customer.BirthDate,
+		&customer.SocialSecurityNumber, &customer.TaxId, &customer.JobStatus,
+		&customer.Address.Street, &customer.Address.HouseNumber, &customer.Address.ZipCode, &customer.Address.City,
+		&customer.BankDetails.Iban, &customer.BankDetails.Bic, &customer.BankDetails.Name)
 	if err != nil {
 		log.Printf("Error retrieving customer details: %v", err)
 		http.Error(w, "Error retrieving customer details", http.StatusInternalServerError)
 		return
 	}
 
-	// Construct customer details map
-	customerDetails := map[string]interface{}{
-		"firstName":            firstName,
-		"lastName":             lastName,
-		"title":                title,
-		"familyStatus":         familyStatus,
-		"birthDate":            birthDate,
-		"socialSecurityNumber": socialSecurityNumber,
-		"taxId":                taxId,
-		"jobStatus":            jobStatus,
-		"address": map[string]interface{}{
-			"street":      street,
-			"houseNumber": houseNumber,
-			"zipCode":     zipCode,
-			"city":        city,
-		},
-		"bankDetails": map[string]string{
-			"iban": iban,
-			"bic":  bic,
-			"name": bankName,
-		},
-		"id": customerID,
-	}
-
 	// Serialize customer details into JSON format
-	responseJSON, err := json.Marshal(customerDetails)
+	responseJSON, err := json.Marshal(customer)
 	if err != nil {
 		http.Error(w, "Error serializing customer details", http.StatusInternalServerError)
 		return
@@ -205,7 +179,7 @@ func CustomersGet(w http.ResponseWriter, r *http.Request) {
 	// Parse query parameters
 	page, err := strconv.Atoi(r.URL.Query().Get("page"))
 	if err != nil || page < 1 {
-		page = 1 // Default to page 1 if page parameter is missing or invalid
+		page = 1 // Default to page 1 if the page parameter is missing or invalid
 	}
 
 	pageSize, err := strconv.Atoi(r.URL.Query().Get("pageSize"))
@@ -244,20 +218,21 @@ func CustomersGet(w http.ResponseWriter, r *http.Request) {
 		log.Fatal(err)
 		return
 	}
-
 	defer rows.Close()
 
 	// Construct slice to hold customer details
-	var customers []Customer
+	var customers []CustomerRes
 
 	// Iterate over the rows and populate the customers slice
 	for rows.Next() {
-		var customer Customer
+		var customer CustomerRes
+		customer.Address = &Address{}
+		customer.BankDetails = &BankDetails{}
 		if err := rows.Scan(
-			&customer.ID, &customer.FirstName, &customer.LastName, &customer.Title, &customer.FamilyStatus, &customer.BirthDate,
-			&customer.SocialSecurityNum, &customer.TaxID, &customer.JobStatus,
+			&customer.Id, &customer.FirstName, &customer.LastName, &customer.Title, &customer.FamilyStatus, &customer.BirthDate,
+			&customer.SocialSecurityNumber, &customer.TaxId, &customer.JobStatus,
 			&customer.Address.Street, &customer.Address.HouseNumber, &customer.Address.ZipCode, &customer.Address.City,
-			&customer.BankDetails.IBAN, &customer.BankDetails.BIC, &customer.BankDetails.Name,
+			&customer.BankDetails.Iban, &customer.BankDetails.Bic, &customer.BankDetails.Name,
 		); err != nil {
 			http.Error(w, "Error scanning customer details", http.StatusInternalServerError)
 			log.Fatal(err)
@@ -293,8 +268,8 @@ func CustomersPost(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 
 	// Read request body
-	var newCustomer Customer
-	if err := json.NewDecoder(r.Body).Decode(&newCustomer); err != nil {
+	var newCustomerReq CustomerReq
+	if err := json.NewDecoder(r.Body).Decode(&newCustomerReq); err != nil {
 		http.Error(w, "Error decoding request body", http.StatusBadRequest)
 		return
 	}
@@ -320,7 +295,7 @@ func CustomersPost(w http.ResponseWriter, r *http.Request) {
 	_, err = tx.ExecContext(context.Background(), `
 		INSERT INTO Address (id, street, houseNumber, zipCode, city)
 		VALUES (?, ?, ?, ?, ?)`,
-		addressID, newCustomer.Address.Street, newCustomer.Address.HouseNumber, newCustomer.Address.ZipCode, newCustomer.Address.City)
+		addressID, newCustomerReq.Address.Street, newCustomerReq.Address.HouseNumber, newCustomerReq.Address.ZipCode, newCustomerReq.Address.City)
 	if err != nil {
 		tx.Rollback()
 		http.Error(w, "Error inserting into Address table", http.StatusInternalServerError)
@@ -332,7 +307,7 @@ func CustomersPost(w http.ResponseWriter, r *http.Request) {
 	_, err = tx.ExecContext(context.Background(), `
 		INSERT INTO BankDetails (id, iban, bic, name)
 		VALUES (?, ?, ?, ?)`,
-		bankDetailsID, newCustomer.BankDetails.IBAN, newCustomer.BankDetails.BIC, newCustomer.BankDetails.Name)
+		bankDetailsID, newCustomerReq.BankDetails.Iban, newCustomerReq.BankDetails.Bic, newCustomerReq.BankDetails.Name)
 	if err != nil {
 		tx.Rollback()
 		http.Error(w, "Error inserting into BankDetails table", http.StatusInternalServerError)
@@ -340,12 +315,14 @@ func CustomersPost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Generate UUID for the new customer
-	newCustomer.ID = uuid.New().String()
+	newCustomerID := uuid.New().String()
 
+	// Insert into Customer table
 	_, err = tx.ExecContext(context.Background(), `
 		INSERT INTO Customer (id, firstName, lastName, title, familyStatus, birthDate, socialSecurityNumber, taxId, jobStatus, addressId, bankDetailsId)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		newCustomer.ID, newCustomer.FirstName, newCustomer.LastName, newCustomer.Title, newCustomer.FamilyStatus, newCustomer.BirthDate, newCustomer.SocialSecurityNum, newCustomer.TaxID, newCustomer.JobStatus, addressID, bankDetailsID)
+		newCustomerID, newCustomerReq.FirstName, newCustomerReq.LastName, newCustomerReq.Title, newCustomerReq.FamilyStatus, newCustomerReq.BirthDate,
+		newCustomerReq.SocialSecurityNumber, newCustomerReq.TaxId, newCustomerReq.JobStatus, addressID, bankDetailsID)
 	if err != nil {
 		tx.Rollback()
 		http.Error(w, "Error inserting into Customer table", http.StatusInternalServerError)
@@ -359,22 +336,124 @@ func CustomersPost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Respond with the new customer details
-	responseJSON, err := json.Marshal(newCustomer)
+	newCustomerRes := CustomerRes{
+		Id:                   newCustomerID,
+		FirstName:            newCustomerReq.FirstName,
+		LastName:             newCustomerReq.LastName,
+		Title:                newCustomerReq.Title,
+		FamilyStatus:         newCustomerReq.FamilyStatus,
+		BirthDate:            newCustomerReq.BirthDate,
+		SocialSecurityNumber: newCustomerReq.SocialSecurityNumber,
+		TaxId:                newCustomerReq.TaxId,
+		JobStatus:            newCustomerReq.JobStatus,
+		Address: &Address{
+			Street:      newCustomerReq.Address.Street,
+			HouseNumber: newCustomerReq.Address.HouseNumber,
+			ZipCode:     newCustomerReq.Address.ZipCode,
+			City:        newCustomerReq.Address.City,
+		},
+		BankDetails: &BankDetails{
+			Iban: newCustomerReq.BankDetails.Iban,
+			Bic:  newCustomerReq.BankDetails.Bic,
+			Name: newCustomerReq.BankDetails.Name,
+		},
+	}
+
+	responseJSON, err := json.Marshal(newCustomerRes)
 	if err != nil {
 		http.Error(w, "Error serializing customer details", http.StatusInternalServerError)
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(http.StatusCreated)
 	w.Write(responseJSON)
 }
 
-func CustomersSearchGet(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+func CustomersCustomerIdDelete(w http.ResponseWriter, r *http.Request) {
+	// Extract customer ID from request URL
+	vars := mux.Vars(r)
+	customerID := vars["customerId"]
+
+	if customerID == "" {
+		http.Error(w, "Missing customerId parameter", http.StatusBadRequest)
+		return
+	}
+
+	// Retrieve database connection
+	db, err := connectToDB()
+	if err != nil {
+		http.Error(w, "Error connecting to database: "+err.Error(), http.StatusInternalServerError)
+		log.Fatal(err)
+		return
+	}
+	defer db.Close()
+
+	var addressID, bankDetailsID string
+
+	// Begin transaction
+	tx, err := db.Begin()
+	if err != nil {
+		http.Error(w, "Error starting transaction: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Save address ID and bank details ID
+	err = tx.QueryRowContext(context.Background(), `
+        SELECT addressId, bankDetailsId FROM Customer WHERE id = ?`, customerID).Scan(&addressID, &bankDetailsID)
+	if err != nil {
+		tx.Rollback()
+		http.Error(w, "Error retrieving customer details: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Delete associated contracts
+	_, err = tx.ExecContext(context.Background(), `
+        DELETE FROM Contract WHERE customerId = ?`, customerID)
+	if err != nil {
+		tx.Rollback()
+		http.Error(w, "Error deleting associated contracts: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Delete the customer
+	_, err = tx.ExecContext(context.Background(), `
+        DELETE FROM Customer WHERE id = ?`, customerID)
+	if err != nil {
+		tx.Rollback()
+		http.Error(w, "Error deleting customer: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Delete customer's address
+	_, err = tx.ExecContext(context.Background(), `
+        DELETE FROM Address WHERE id = ?`, addressID)
+	if err != nil {
+		tx.Rollback()
+		http.Error(w, "Error deleting customer's address: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Delete customer's bank details
+	_, err = tx.ExecContext(context.Background(), `
+        DELETE FROM BankDetails WHERE id = ?`, bankDetailsID)
+	if err != nil {
+		tx.Rollback()
+		http.Error(w, "Error deleting customer's bank details: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		http.Error(w, "Error committing transaction: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Respond with success message
 	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("Customer deleted"))
 }
 
-func CustomersCustomerIdDelete(w http.ResponseWriter, r *http.Request) {
+func CustomersSearchGet(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	w.WriteHeader(http.StatusOK)
 }
