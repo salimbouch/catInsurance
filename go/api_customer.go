@@ -270,8 +270,8 @@ func CustomersPost(w http.ResponseWriter, r *http.Request) {
 	// Insert into Address table
 	addressID := uuid.New().String() // Generate UUID for the address
 	_, err = tx.ExecContext(context.Background(), `
-		INSERT INTO Address (id, street, houseNumber, zipCode, city)
-		VALUES (?, ?, ?, ?, ?)`,
+			INSERT INTO Address (id, street, houseNumber, zipCode, city)
+			VALUES (?, ?, ?, ?, ?)`,
 		addressID, newCustomerReq.Address.Street, newCustomerReq.Address.HouseNumber, newCustomerReq.Address.ZipCode, newCustomerReq.Address.City)
 	if err != nil {
 		tx.Rollback()
@@ -282,8 +282,8 @@ func CustomersPost(w http.ResponseWriter, r *http.Request) {
 	// Insert into BankDetails table
 	bankDetailsID := uuid.New().String() // Generate UUID for the bank details
 	_, err = tx.ExecContext(context.Background(), `
-		INSERT INTO BankDetails (id, iban, bic, name)
-		VALUES (?, ?, ?, ?)`,
+			INSERT INTO BankDetails (id, iban, bic, name)
+			VALUES (?, ?, ?, ?)`,
 		bankDetailsID, newCustomerReq.BankDetails.Iban, newCustomerReq.BankDetails.Bic, newCustomerReq.BankDetails.Name)
 	if err != nil {
 		tx.Rollback()
@@ -296,8 +296,8 @@ func CustomersPost(w http.ResponseWriter, r *http.Request) {
 
 	// Insert into Customer table
 	_, err = tx.ExecContext(context.Background(), `
-		INSERT INTO Customer (id, firstName, lastName, title, familyStatus, birthDate, socialSecurityNumber, taxId, jobStatus, addressId, bankDetailsId)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			INSERT INTO Customer (id, firstName, lastName, title, familyStatus, birthDate, socialSecurityNumber, taxId, jobStatus, addressId, bankDetailsId)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		newCustomerID, newCustomerReq.FirstName, newCustomerReq.LastName, newCustomerReq.Title, newCustomerReq.FamilyStatus, newCustomerReq.BirthDate,
 		newCustomerReq.SocialSecurityNumber, newCustomerReq.TaxId, newCustomerReq.JobStatus, addressID, bankDetailsID)
 	if err != nil {
@@ -552,6 +552,111 @@ func CustomersSearchGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func CustomersCustomerIdPatch(w http.ResponseWriter, r *http.Request) {
+	// Extract customerId from path parameters
+	vars := mux.Vars(r)
+	customerID := vars["customerId"]
+
+	// Check if customerId is provided
+	if customerID == "" {
+		http.Error(w, "Missing customerId parameter", http.StatusBadRequest)
+		return
+	}
+
+	// Set Content-Type header to indicate JSON response
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+
+	// Read request body
+	var updatedCustomerReq CustomerReq
+	if err := json.NewDecoder(r.Body).Decode(&updatedCustomerReq); err != nil {
+		http.Error(w, "Invalid input data", http.StatusBadRequest)
+		return
+	}
+
+	// Retrieve database credentials
+	db, err := connectToDB()
+	if err != nil {
+		http.Error(w, "Error connecting to database", http.StatusInternalServerError)
+		log.Fatal(err)
+		return
+	}
+	defer db.Close()
+
+	// Begin transaction
+	tx, err := db.Begin()
+	if err != nil {
+		http.Error(w, "Error starting transaction", http.StatusInternalServerError)
+		return
+	}
+
+	// Update Customer table
+	_, err = tx.ExecContext(context.Background(), `
+		UPDATE Customer
+		SET
+			firstName = ?,
+			lastName = ?,
+			title = ?,
+			familyStatus = ?,
+			birthDate = ?,
+			socialSecurityNumber = ?,
+			taxId = ?,
+			jobStatus = ?
+		WHERE
+			id = ?`,
+		updatedCustomerReq.FirstName, updatedCustomerReq.LastName, updatedCustomerReq.Title, updatedCustomerReq.FamilyStatus,
+		updatedCustomerReq.BirthDate, updatedCustomerReq.SocialSecurityNumber, updatedCustomerReq.TaxId, updatedCustomerReq.JobStatus,
+		customerID)
+	if err != nil {
+		tx.Rollback()
+		http.Error(w, "Error updating customer details "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Update Address table if provided
+	if updatedCustomerReq.Address != nil {
+		_, err = tx.ExecContext(context.Background(), `
+			UPDATE Address
+			SET
+				street = ?,
+				houseNumber = ?,
+				zipCode = ?,
+				city = ?
+			WHERE
+				id = (SELECT addressId FROM Customer WHERE id = ?)`,
+			updatedCustomerReq.Address.Street, updatedCustomerReq.Address.HouseNumber,
+			updatedCustomerReq.Address.ZipCode, updatedCustomerReq.Address.City, customerID)
+		if err != nil {
+			tx.Rollback()
+			http.Error(w, "Error updating address details "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Update BankDetails table if provided
+	if updatedCustomerReq.BankDetails != nil {
+		_, err = tx.ExecContext(context.Background(), `
+			UPDATE BankDetails
+			SET
+				iban = ?,
+				bic = ?,
+				name = ?
+			WHERE
+				id = (SELECT bankDetailsId FROM Customer WHERE id = ?)`,
+			updatedCustomerReq.BankDetails.Iban, updatedCustomerReq.BankDetails.Bic,
+			updatedCustomerReq.BankDetails.Name, customerID)
+		if err != nil {
+			tx.Rollback()
+			http.Error(w, "Error updating bank details "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		http.Error(w, "Error committing transaction", http.StatusInternalServerError)
+		return
+	}
+
+	// Respond with success message
 	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "Customer updated")
 }
