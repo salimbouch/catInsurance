@@ -9,17 +9,144 @@
 package swagger
 
 import (
+	"context"
+	"encoding/json"
+	"log"
 	"net/http"
+	"strconv"
+
+	_ "github.com/go-sql-driver/mysql"
+	"github.com/google/uuid"
+	"github.com/gorilla/mux"
 )
 
 func ContractsContractIdGet(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	contractId := vars["contractId"]
+
+	if contractId == "" {
+		http.Error(w, "Missing contractId parameter", http.StatusBadRequest)
+		return
+	}
+
+	db, err := connectToDB()
+	if err != nil {
+		http.Error(w, "Error connecting to database", http.StatusInternalServerError)
+		log.Fatal(err)
+		return
+	}
+	defer db.Close()
+
+	// Query to retrieve contract details with JOIN
+	var contract ContractRes
+
+	//Initialize Customer field
+
+	err = db.QueryRowContext(r.Context(), `
+	SELECT
+		co.id, co.startDate, co.endDate, co.coverage, co.catName, co.breed, co.color, co.birthDate, co.neutered, co.personality, co.environment, co.weight, 
+		cu.id
+	FROM
+		Contract co
+	JOIN
+		Customer cu ON co.customerId = cu.id
+	WHERE
+		co.id = ?`, contractId).Scan(
+		&contract.Id, &contract.StartDate, &contract.EndDate, &contract.Coverage, &contract.CatName, &contract.Breed, &contract.Color, &contract.BirthDate, &contract.Neutered,
+		&contract.Personality, &contract.Environment, &contract.Weight, &contract.CustomerId)
+	if err != nil {
+		log.Printf("Error retrieving contract details: %v", err)
+		http.Error(w, "Error retrieving contract details", http.StatusInternalServerError)
+		return
+	}
+
+	// Serialize contract details into JSON format
+	responseJSON, err := json.Marshal(contract)
+	if err != nil {
+		http.Error(w, "Error serializing contract details", http.StatusInternalServerError)
+		return
+	}
+
+	// Set Content-Type header to indicate JSON response
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+
+	// Write the JSON response back to the client
 	w.WriteHeader(http.StatusOK)
+	w.Write(responseJSON)
 }
 
 func ContractsPost(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+
+	// Read request body
+	var newContractReq ContractReq
+	if err := json.NewDecoder(r.Body).Decode(&newContractReq); err != nil {
+		http.Error(w, "Error decoding request body", http.StatusBadRequest)
+		return
+	}
+
+	// Retrieve database credentials
+	db, err := connectToDB()
+	if err != nil {
+		http.Error(w, "Error connecting to database", http.StatusInternalServerError)
+		log.Fatal(err)
+		return
+	}
+	defer db.Close()
+
+	// Begin transaction
+	tx, err := db.Begin()
+	if err != nil {
+		http.Error(w, "Error starting transaction", http.StatusInternalServerError)
+		return
+	}
+
+	// Generate UUID for the new contract
+	newContractID := uuid.New().String()
+
+	// Insert into Contract table
+	_, err = tx.ExecContext(context.Background(), `
+		INSERT INTO Contract (id, startDate, endDate, coverage, catName, breed, color, birthDate, neutered, personality, environment, weight, customerId)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		newContractID, newContractReq.StartDate, newContractReq.EndDate, newContractReq.Coverage, newContractReq.CatName, newContractReq.Breed, newContractReq.Color,
+		newContractReq.BirthDate, newContractReq.Neutered, newContractReq.Personality, newContractReq.Environment, newContractReq.Weight, newContractReq.CustomerId)
+	if err != nil {
+		tx.Rollback()
+		http.Error(w, "Error inserting into Contract table", http.StatusInternalServerError)
+		return
+	}
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		http.Error(w, "Error committing transaction", http.StatusInternalServerError)
+		return
+	}
+
+	// Respond with the new contract details
+	newContractRes := ContractRes{
+		Id:          newContractID,
+		StartDate:   newContractReq.StartDate,
+		EndDate:     newContractReq.EndDate,
+		Coverage:    newContractReq.Coverage,
+		CatName:     newContractReq.CatName,
+		Breed:       newContractReq.Breed,
+		Color:       newContractReq.Color,
+		BirthDate:   newContractReq.BirthDate,
+		Neutered:    newContractReq.Neutered,
+		Personality: newContractReq.Personality,
+		Environment: newContractReq.Environment,
+		Weight:      newContractReq.Weight,
+		CustomerId:  newContractReq.CustomerId,
+	}
+
+	responseJSON, err := json.Marshal(newContractRes)
+	if err != nil {
+		http.Error(w, "Error serializing contract details", http.StatusInternalServerError)
+		return
+	}
+
 	w.WriteHeader(http.StatusOK)
+	w.Write(responseJSON)
 }
 
 func ContractsRatePost(w http.ResponseWriter, r *http.Request) {
@@ -28,6 +155,68 @@ func ContractsRatePost(w http.ResponseWriter, r *http.Request) {
 }
 
 func CustomersCustomerIdContractsGet(w http.ResponseWriter, r *http.Request) {
+	// Parse query parameters
+	page, err := strconv.Atoi(r.URL.Query().Get("page"))
+	if err != nil || page < 1 {
+		page = 1 // Default to page 1 if the page parameter is missing or invalid
+	}
+
+	pageSize, err := strconv.Atoi(r.URL.Query().Get("pageSize"))
+	if err != nil || pageSize < 1 {
+		pageSize = 20 // Default page size if pageSize parameter is missing or invalid
+	}
+
+	// Calculate offset based on page number and page size
+	offset := (page - 1) * pageSize
+
+	vars := mux.Vars(r)
+	customerID := vars["customerId"]
+
+	if customerID == "" {
+		http.Error(w, "Missing customerId parameter", http.StatusBadRequest)
+		return
+	}
+
+	db, err := connectToDB()
+	if err != nil {
+		http.Error(w, "Error connecting to database", http.StatusInternalServerError)
+		log.Fatal(err)
+		return
+	}
+	defer db.Close()
+
+	// Query to retrieve contract details with JOIN
+	var contract ContractRes
+	var customer CustomerRes
+
+	//Initialize Customer field
+
+	err = db.QueryRowContext(r.Context(),
+		"SELECT cu.id, co.id, co.startDate, co.endDate, co.coverage, co.catName, co.breed, co.color, co.birthDate, co.neutered, co.personality, co.environment, co.weight "+
+			"FROM Customer cu"+
+			"JOIN Contract co ON cu.id = co.customerId"+
+			"ORDER BY cu.id ASC"+
+			"WHERE cu.id = ?"+
+			"LIMIT ? OFFSET ?", customerID, pageSize, offset).Scan(
+		&customer.Id, &contract.Id, &contract.StartDate, &contract.EndDate, &contract.Coverage, &contract.CatName, &contract.Breed, &contract.Color, &contract.BirthDate, &contract.Neutered,
+		&contract.Personality, &contract.Environment, &contract.Weight)
+	if err != nil {
+		log.Printf("Error retrieving contract details: %v", err)
+		http.Error(w, "Error retrieving contract details", http.StatusInternalServerError)
+		return
+	}
+
+	// Serialize customer details into JSON format
+	responseJSON, err := json.Marshal(customer)
+	if err != nil {
+		http.Error(w, "Error serializing customer details", http.StatusInternalServerError)
+		return
+	}
+
+	// Set Content-Type header to indicate JSON response
 	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+
+	// Write the JSON response back to the client
 	w.WriteHeader(http.StatusOK)
+	w.Write(responseJSON)
 }
