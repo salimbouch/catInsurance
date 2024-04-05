@@ -107,12 +107,12 @@ func ContractsPost(w http.ResponseWriter, r *http.Request) {
 	// Insert into Contract table
 	_, err = tx.ExecContext(context.Background(), `
 		INSERT INTO Contract (id, startDate, endDate, coverage, catName, breed, color, birthDate, neutered, personality, environment, weight, customerId)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		newContractID, newContractReq.StartDate, newContractReq.EndDate, newContractReq.Coverage, newContractReq.CatName, newContractReq.Breed, newContractReq.Color,
 		newContractReq.BirthDate, newContractReq.Neutered, newContractReq.Personality, newContractReq.Environment, newContractReq.Weight, newContractReq.CustomerId)
 	if err != nil {
 		tx.Rollback()
-		http.Error(w, "Error inserting into Contract table", http.StatusInternalServerError)
+		http.Error(w, "Error inserting into Contract table"+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -186,30 +186,48 @@ func CustomersCustomerIdContractsGet(w http.ResponseWriter, r *http.Request) {
 	defer db.Close()
 
 	// Query to retrieve contract details with JOIN
-	var contract ContractRes
-	var customer CustomerRes
+	var contracts []ContractRes
 
 	//Initialize Customer field
+	// Query to retrieve paginated customer details
+	rows, err := db.QueryContext(r.Context(),
+		`SELECT co.id, co.startDate, co.endDate, co.coverage, co.catName, co.breed, co.color, co.birthDate, co.neutered, co.personality, co.environment, co.weight, co.customerId
+			FROM Contract co
+			WHERE co.customerId = ?
+			ORDER BY co.customerId ASC
+			LIMIT ? OFFSET ?`, customerID, pageSize, offset)
+	if err != nil {
+		http.Error(w, "Error retrieving customer details", http.StatusInternalServerError)
+		log.Fatal(err)
+		return
+	}
+	defer rows.Close()
 
-	err = db.QueryRowContext(r.Context(),
-		"SELECT cu.id, co.id, co.startDate, co.endDate, co.coverage, co.catName, co.breed, co.color, co.birthDate, co.neutered, co.personality, co.environment, co.weight "+
-			"FROM Customer cu"+
-			"JOIN Contract co ON cu.id = co.customerId"+
-			"ORDER BY cu.id ASC"+
-			"WHERE cu.id = ?"+
-			"LIMIT ? OFFSET ?", customerID, pageSize, offset).Scan(
-		&customer.Id, &contract.Id, &contract.StartDate, &contract.EndDate, &contract.Coverage, &contract.CatName, &contract.Breed, &contract.Color, &contract.BirthDate, &contract.Neutered,
-		&contract.Personality, &contract.Environment, &contract.Weight)
+	// Iterate over the rows and populate the contract slice
+	for rows.Next() {
+		var contract ContractRes
+		if err := rows.Scan(
+			&contract.Id, &contract.StartDate, &contract.EndDate, &contract.Coverage, &contract.CatName, &contract.Breed, &contract.Color, &contract.BirthDate, &contract.Neutered,
+			&contract.Personality, &contract.Environment, &contract.Weight, &contract.CustomerId); err != nil {
+			http.Error(w, "Error scanning contract details", http.StatusInternalServerError)
+			log.Fatal(err)
+			return
+		}
+
+		// Append contract details to the contract slice
+		contracts = append(contracts, contract)
+	}
+
 	if err != nil {
 		log.Printf("Error retrieving contract details: %v", err)
-		http.Error(w, "Error retrieving contract details", http.StatusInternalServerError)
+		http.Error(w, "Error retrieving contract details"+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// Serialize customer details into JSON format
-	responseJSON, err := json.Marshal(customer)
+	// Serialize contract details into JSON format
+	responseJSON, err := json.Marshal(contracts)
 	if err != nil {
-		http.Error(w, "Error serializing customer details", http.StatusInternalServerError)
+		http.Error(w, "Error serializing contract details", http.StatusInternalServerError)
 		return
 	}
 
